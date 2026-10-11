@@ -54,22 +54,63 @@ CREATE TABLE IF NOT EXISTS stock_moves (
 CREATE TABLE IF NOT EXISTS processed_requests (request_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 """
 
+# A business type is just data: a starter catalog. The parser, rules and UI read whatever catalog is
+# in the database, so supporting a new kind of shop needs no code changes.
 # name, unit, price, stock, low-stock threshold, aliases (English / Hinglish / Hindi / Bengali)
-SEED_PRODUCTS = [
-    ("Water Bottle 1L", "bottle", 40, 60, 15, "bottle,bottles,water,paani,pani,paani ki bottle,बोतल,पानी,বোতল,জল"),
-    ("Parle-G Biscuit", "pack", 10, 200, 30, "biscuit,biscuits,parle,parle g,बिस्कुट,বিস্কুট"),
-    ("Amul Milk 500ml", "packet", 33, 40, 10, "milk,doodh,dudh,amul,दूध,দুধ"),
-    ("Tata Salt 1kg", "packet", 28, 35, 10, "salt,namak,नमक,লবণ,নুন"),
-    ("Aashirvaad Atta 5kg", "bag", 285, 12, 5, "atta,aata,flour,wheat flour,आटा,আটা"),
-    ("Fortune Oil 1L", "pouch", 185, 6, 8, "oil,tel,cooking oil,तेल,তেল"),
-    ("Sugar 1kg", "packet", 48, 30, 10, "sugar,cheeni,chini,चीनी,চিনি"),
-    ("Toor Dal 1kg", "packet", 160, 18, 6, "dal,daal,toor,arhar,दाल,ডাল"),
-    ("Basmati Rice 5kg", "bag", 450, 4, 5, "rice,chawal,basmati,चावल,চাল"),
-    ("Maggi Noodles", "pack", 14, 90, 20, "maggi,noodles,मैगी,ম্যাগি"),
-    ("Lux Soap", "bar", 38, 45, 10, "soap,sabun,lux,साबुन,সাবান"),
-    ("Colgate Toothpaste 100g", "tube", 55, 25, 8, "toothpaste,colgate,paste,टूथपेस्ट,টুথপেস্ট"),
-    ("Surf Excel 1kg", "packet", 140, 20, 6, "surf,detergent,washing powder,सर्फ,সার্ফ"),
-]
+BUSINESS_TEMPLATES = {
+    "Kirana / General store": ("Maa Durga General Store", [
+        ("Water Bottle 1L", "bottle", 40, 60, 15, "bottle,bottles,water,paani,pani,paani ki bottle,बोतल,पानी,বোতল,জল"),
+        ("Parle-G Biscuit", "pack", 10, 200, 30, "biscuit,biscuits,parle,parle g,बिस्कुट,বিস্কুট"),
+        ("Amul Milk 500ml", "packet", 33, 40, 10, "milk,doodh,dudh,amul,दूध,দুধ"),
+        ("Tata Salt 1kg", "packet", 28, 35, 10, "salt,namak,नमक,লবণ,নুন"),
+        ("Aashirvaad Atta 5kg", "bag", 285, 12, 5, "atta,aata,flour,wheat flour,आटा,আটা"),
+        ("Fortune Oil 1L", "pouch", 185, 6, 8, "oil,tel,cooking oil,तेल,তেল"),
+        ("Sugar 1kg", "packet", 48, 30, 10, "sugar,cheeni,chini,चीनी,চিনি"),
+        ("Toor Dal 1kg", "packet", 160, 18, 6, "dal,daal,toor,arhar,दाल,ডাল"),
+        ("Basmati Rice 5kg", "bag", 450, 4, 5, "rice,chawal,basmati,चावल,চাল"),
+        ("Maggi Noodles", "pack", 14, 90, 20, "maggi,noodles,मैगी,ম্যাগি"),
+        ("Lux Soap", "bar", 38, 45, 10, "soap,sabun,lux,साबुन,সাবান"),
+        ("Colgate Toothpaste 100g", "tube", 55, 25, 8, "toothpaste,colgate,paste,टूथपेस्ट,টুথপেস্ট"),
+        ("Surf Excel 1kg", "packet", 140, 20, 6, "surf,detergent,washing powder,सर्फ,সার্ফ"),
+    ]),
+    "Bakery & sweets": ("Kolkata Sweet House", [
+        ("Rasgulla (1 pc)", "piece", 15, 200, 40, "rasgulla,rosogolla,रसगुल्ला,রসগোল্লা"),
+        ("Sandesh (1 pc)", "piece", 20, 150, 30, "sandesh,sondesh,संदेश,সন্দেশ"),
+        ("Mishti Doi 250g", "cup", 60, 40, 10, "mishti doi,doi,curd,dahi,मिष्टी दोई,মিষ্টি দই"),
+        ("Bread Loaf", "loaf", 45, 30, 8, "bread,pav,double roti,ब्रेड,পাউরুটি"),
+        ("Chocolate Cake 500g", "cake", 450, 6, 2, "cake,chocolate cake,केक,কেক"),
+        ("Cookies Box", "box", 120, 25, 6, "cookies,biscuits,कुकीज़,কুকিজ"),
+        ("Samosa", "piece", 12, 80, 20, "samosa,singara,समोसा,শিঙাড়া"),
+    ]),
+    "Medical store": ("Sanjeevani Medicos", [
+        ("Paracetamol 500mg (strip)", "strip", 30, 120, 25, "paracetamol,crocin,dolo,fever tablet,पेरासिटामोल"),
+        ("Cetirizine 10mg (strip)", "strip", 25, 80, 20, "cetirizine,allergy tablet,cetzine"),
+        ("ORS Sachet", "sachet", 22, 100, 25, "ors,electral,glucose,ओआरएस"),
+        ("Cough Syrup 100ml", "bottle", 110, 30, 8, "cough syrup,syrup,khansi,खांसी की दवा"),
+        ("Bandage Roll", "roll", 40, 50, 10, "bandage,patti,पट्टी"),
+        ("Hand Sanitizer 200ml", "bottle", 95, 35, 8, "sanitizer,सैनिटाइज़र"),
+        ("Digital Thermometer", "piece", 250, 8, 3, "thermometer,थर्मामीटर"),
+    ]),
+    "Hardware & paint": ("Vishwakarma Hardware", [
+        ("Wall Putty 20kg", "bag", 850, 15, 4, "putty,wall putty,पुट्टी"),
+        ("Emulsion Paint 4L", "can", 1450, 10, 3, "paint,emulsion,पेंट,রং"),
+        ("Paint Brush 4in", "piece", 120, 30, 8, "brush,paint brush,ब्रश"),
+        ("Screws (box of 100)", "box", 90, 40, 10, "screw,screws,पेंच"),
+        ("PVC Pipe 1in (10ft)", "length", 210, 25, 6, "pipe,pvc pipe,पाइप"),
+        ("LED Bulb 9W", "piece", 99, 60, 15, "bulb,led,बल्ब,বাল্ব"),
+        ("Electrical Tape", "roll", 25, 70, 15, "tape,insulation tape,टेप"),
+    ]),
+    "Stationery": ("Vidya Stationers", [
+        ("Notebook 200 pages", "piece", 60, 120, 25, "notebook,copy,कॉपी,খাতা"),
+        ("Ball Pen (blue)", "piece", 10, 300, 50, "pen,ball pen,पेन,কলম"),
+        ("Pencil", "piece", 5, 250, 50, "pencil,पेंसिल,পেন্সিল"),
+        ("Geometry Box", "box", 150, 20, 5, "geometry box,compass box,ज्योमेट्री बॉक्स"),
+        ("A4 Paper Ream", "ream", 320, 15, 4, "a4,paper,rim,कागज़"),
+        ("Glue Stick", "piece", 25, 60, 15, "glue,fevistick,गोंद"),
+    ]),
+    "Custom (start empty)": ("My Shop", []),
+}
+DEFAULT_TEMPLATE = "Kirana / General store"
 SEED_CUSTOMERS = [("Priya Sharma", "98300 11223"), ("Amit Das", "98310 44556"), ("Sunita Devi", "97480 77889")]
 
 
@@ -96,19 +137,20 @@ def transaction(conn: sqlite3.Connection):
         raise
 
 
-def init_db(reset: bool = False) -> None:
+def init_db(reset: bool = False, template: str | None = None, business_name: str | None = None) -> None:
     if reset and os.path.exists(DB_PATH):
         os.remove(DB_PATH)
     conn = connect()
     conn.executescript(SCHEMA)
-    if conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
-        _seed(conn)
+    if conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0:
+        _seed(conn, template or DEFAULT_TEMPLATE, business_name)
     conn.close()
 
 
-def _seed(conn: sqlite3.Connection) -> None:
+def _seed(conn: sqlite3.Connection, template: str, business_name: str | None) -> None:
+    default_name, products = BUSINESS_TEMPLATES[template]
     with transaction(conn):
-        for name, unit, price, stock, low, aliases in SEED_PRODUCTS:
+        for name, unit, price, stock, low, aliases in products:
             conn.execute(
                 "INSERT INTO products(name, unit, price, stock, low_stock_at, aliases) VALUES (?,?,?,?,?,?)",
                 (name, unit, price, stock, low, aliases))
@@ -116,19 +158,52 @@ def _seed(conn: sqlite3.Connection) -> None:
             conn.execute("INSERT INTO customers(name, phone, created_at) VALUES (?,?,?)", (name, phone, now()))
         for m in MODULES:
             conn.execute("INSERT INTO settings(key, value) VALUES (?, '1')", (f"module:{m}",))
-        conn.execute("INSERT INTO settings(key, value) VALUES ('business_name', 'Maa Durga General Store')")
-    # A little real history, written through the same code path the app uses.
-    history = [
-        (2, "Priya Sharma", [("Aashirvaad Atta 5kg", 1), ("Sugar 1kg", 2)], 381, "upi"),
-        (1, "Amit Das", [("Amul Milk 500ml", 4), ("Parle-G Biscuit", 6)], 100, "cash"),
-        (0, "Sunita Devi", [("Toor Dal 1kg", 1), ("Tata Salt 1kg", 1), ("Lux Soap", 2)], 0, "cash"),
-    ]
+        conn.execute("INSERT INTO settings(key, value) VALUES ('business_name', ?)", (business_name or default_name,))
+        conn.execute("INSERT INTO settings(key, value) VALUES ('business_type', ?)", (template,))
+    if len(products) < 3:
+        return
+    # A little real history for the dashboard, written through the same code path the app uses.
+    names = [p[0] for p in products]
+    history = [(2, "Priya Sharma", [(names[0], 2), (names[1], 1)], 1.0, "upi"),
+               (1, "Amit Das", [(names[2], 1), (names[1], 2)], 0.5, "cash"),
+               (0, "Sunita Devi", [(names[-1], 2), (names[0], 1)], 0.0, "cash")]
     mods = {m: True for m in MODULES}
-    for days_ago, cust, items, paid, method in history:
+    for days_ago, cust, items, paid_share, method in history:
         plan = build_plan({"intent": "sale", "customer_name": cust,
                            "items": [{"product": p, "quantity": q, "stated_unit_price": None} for p, q in items],
-                           "payment_amount": paid or None, "payment_method": method}, mods, conn)
+                           "payment_amount": None, "payment_method": method}, mods, conn)
+        plan["payment_amount"] = round(plan["subtotal"] * paid_share)
+        recompute(plan, mods, conn)
         commit_plan(plan, mods, conn, when=(datetime.now() - timedelta(days=days_ago, hours=3)).strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def save_catalog(conn, rows: list[dict]) -> int:
+    """Insert or update catalog rows from the owner's editor. All-or-nothing. Returns rows written."""
+    clean = []
+    for r in rows:
+        name = str(r.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            price, stock, low = float(r["price"]), int(r["stock"]), int(r.get("low_stock_at") or 0)
+        except (TypeError, ValueError, KeyError):
+            raise ValueError(f"'{name}': price, stock and reorder level must be numbers.")
+        if price < 0 or stock < 0 or low < 0:
+            raise ValueError(f"'{name}': values can't be negative.")
+        clean.append((name, str(r.get("unit") or "unit").strip(), price, stock, low, str(r.get("aliases") or "").strip()))
+    with transaction(conn):
+        for name, unit, price, stock, low, aliases in clean:
+            old = conn.execute("SELECT id, stock FROM products WHERE name=?", (name,)).fetchone()
+            conn.execute("""INSERT INTO products(name, unit, price, stock, low_stock_at, aliases) VALUES (?,?,?,?,?,?)
+                            ON CONFLICT(name) DO UPDATE SET unit=excluded.unit, price=excluded.price,
+                            stock=excluded.stock, low_stock_at=excluded.low_stock_at, aliases=excluded.aliases""",
+                         (name, unit, price, stock, low, aliases))
+            change = stock - (old["stock"] if old else 0)
+            if change:
+                pid = old["id"] if old else conn.execute("SELECT id FROM products WHERE name=?", (name,)).fetchone()[0]
+                conn.execute("INSERT INTO stock_moves(product_id, change, reason, ref, created_at) VALUES (?,?,?,?,?)",
+                             (pid, change, "manual adjustment", None, now()))
+    return len(clean)
 
 
 # ---------------------------------------------------------------- settings

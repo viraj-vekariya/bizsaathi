@@ -36,6 +36,10 @@ st.markdown("""
 .act {padding: 6px 10px; border-left: 3px solid #22a05a; margin: 4px 0; background: rgba(34,160,90,.06); border-radius: 4px;}
 .skip {padding: 6px 10px; border-left: 3px solid #999; margin: 4px 0; background: rgba(128,128,128,.08); border-radius: 4px;}
 .big-total {font-size: 1.15rem;}
+.step {display:inline-block; padding: 6px 14px; margin: 0 6px 10px 0; border-radius: 8px; font-size: .9rem;
+       border: 1px solid rgba(128,128,128,.3); opacity: .55;}
+.step.cur {opacity: 1; border-color: #1f6f4a; background: rgba(31,111,74,.08); font-weight: 600;}
+.step.done {opacity: .85;}
 </style>""", unsafe_allow_html=True)
 
 ss = st.session_state
@@ -149,15 +153,25 @@ def show_invoice(order_id: int, key: str):
 
 
 # ------------------------------------------------------------------ assistant
-SAMPLES = [
-    ("Rahul — 10 bottles, ₹200 advance",
-     "Rahul ordered 10 bottles at ₹40 each. He paid ₹200 in advance. Create his bill and update my inventory."),
-    ("Hinglish", "Priya ne 2 kilo cheeni aur 3 Maggi liya, 50 rupay UPI se diye"),
-    ("Hindi payment", "अमित ने 50 रुपये जमा किए"),
-    ("Bengali", "সুনীতা ৪টা সাবান আর ২ প্যাকেট দুধ নিয়েছে, ১০০ টাকা দিয়েছে"),
-    ("Restock", "Supplier se 24 Fortune oil aur 10 basmati chawal ke bag aaye"),
-    ("Not enough stock", "Amit wants 20 bags of basmati rice"),
-]
+def samples() -> list[tuple[str, str]]:
+    """Example commands built from whatever catalog this shop has, so they work for any business type."""
+    if core.get_setting(conn, "business_type") == core.DEFAULT_TEMPLATE:
+        return [("Sale with advance", "Rahul ordered 10 bottles at ₹40 each. He paid ₹200 in advance."),
+                ("Payment against dues", "Amit paid ₹50 towards his dues by UPI."),
+                ("Not enough stock", "Amit wants 20 bags of basmati rice."),
+                ("Hinglish", "Priya ne 2 kilo cheeni aur 3 Maggi liya, 50 rupay UPI se diye")]
+    prods = conn.execute("SELECT name, unit, price, stock FROM products ORDER BY id").fetchall()
+    if not prods:
+        return []
+    p0 = prods[0]
+    p1 = prods[1] if len(prods) > 1 else p0
+    low = min(prods, key=lambda p: p["stock"])
+    q = 3
+    return [("Sale with advance", f"Rahul bought {q} {p0['name']} and 1 {p1['name']}. "
+                                  f"He paid ₹{int(p0['price'] * q // 2)} in advance."),
+            ("Payment against dues", "Amit paid ₹50 towards his dues by UPI."),
+            ("Not enough stock", f"Amit wants {low['stock'] + 20} {low['name']}."),
+            ("Hinglish", f"Priya ne 2 {p1['name']} liye, poora paisa cash mein diya")]
 
 
 def run_parse(text: str):
@@ -315,9 +329,15 @@ def use_sample(text: str):
 
 def page_assistant():
     st.markdown(f"### What happened in the shop today?")
-    st.markdown(module_pills(), unsafe_allow_html=True)
+    step = 3 if (ss.last_result and not ss.plan) else 2 if ss.plan else 1
+    st.markdown("".join(
+        f'<span class="step {"cur" if i == step else "done" if i < step else ""}">{i}. {t}</span>'
+        for i, t in enumerate(["Tell BizSaathi what happened", "Review what will change", "Saved to your books"], 1)),
+        unsafe_allow_html=True)
     kpi_row()
     st.write("")
+    if conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
+        st.info("Your catalog is empty. Add your products on the Inventory page, or pick a business type in Settings.")
 
     if hasattr(st, "audio_input"):
         audio = st.audio_input("Speak your instruction (Sarvam Saaras speech-to-text)")
@@ -348,8 +368,9 @@ def page_assistant():
     c[1].button("Manual entry", width="stretch", on_click=manual_plan)
 
     st.caption("Try an example:")
-    cols = st.columns(len(SAMPLES))
-    for col, (label, text) in zip(cols, SAMPLES):
+    ex = samples()
+    cols = st.columns(max(len(ex), 1))
+    for col, (label, text) in zip(cols, ex):
         col.button(label, width="stretch", on_click=use_sample, args=(text,), key=f"ex_{label}")
 
     if ss.get("parse_error"):
@@ -438,13 +459,31 @@ def page_customers():
 
 
 def page_inventory():
-    st.markdown("### Inventory")
+    st.markdown("### Inventory & catalog")
+    st.caption("Edit prices, stock and the names customers use for each item, or add new rows. "
+               "BizSaathi's AI reads this catalog, so any kind of shop works.")
     rows = conn.execute("SELECT * FROM products ORDER BY name").fetchall()
-    df = pd.DataFrame([{"Status": "🔴 Low" if r["stock"] <= r["low_stock_at"] else "🟢 OK", "Product": r["name"],
-                        "Unit": r["unit"], "Price": r["price"], "Stock": r["stock"], "Reorder at": r["low_stock_at"]}
-                       for r in rows])
-    st.dataframe(df, hide_index=True, width="stretch",
-                 column_config={"Price": st.column_config.NumberColumn(format="₹%.2f")})
+    df = pd.DataFrame([{"Status": "Low" if r["stock"] <= r["low_stock_at"] else "OK", "name": r["name"],
+                        "unit": r["unit"], "price": r["price"], "stock": r["stock"], "low_stock_at": r["low_stock_at"],
+                        "aliases": r["aliases"]} for r in rows],
+                      columns=["Status", "name", "unit", "price", "stock", "low_stock_at", "aliases"])
+    edited = st.data_editor(df, num_rows="dynamic", hide_index=True, width="stretch", key="catalog_editor",
+                            column_config={
+                                "Status": st.column_config.TextColumn(disabled=True),
+                                "name": st.column_config.TextColumn("Product", required=True),
+                                "unit": st.column_config.TextColumn("Unit"),
+                                "price": st.column_config.NumberColumn("Price (₹)", min_value=0.0, format="%.2f"),
+                                "stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, format="%d"),
+                                "low_stock_at": st.column_config.NumberColumn("Reorder at", min_value=0, step=1, format="%d"),
+                                "aliases": st.column_config.TextColumn("Also called (comma-separated)", width="large"),
+                            })
+    if st.button("Save catalog", type="primary"):
+        try:
+            n = core.save_catalog(conn, edited.to_dict("records"))
+            st.success(f"Saved {n} product(s).")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
     st.markdown("**Recent stock movements**")
     moves = conn.execute("""SELECT m.created_at, p.name, m.change, m.reason, m.ref FROM stock_moves m
                             JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 12""").fetchall()
@@ -503,11 +542,17 @@ def page_settings():
         core.set_setting(conn, "business_name", name.strip() or "My Shop")
         st.rerun()
     st.divider()
-    st.markdown("**Demo data**")
-    st.caption("Wipes everything and restores the demo catalog, three customers and three past orders.")
-    if st.button("Reset demo data"):
+    st.markdown("**Set up for a different kind of business**")
+    st.caption("Loads a starter catalog for that business type. Everything else — AI parsing, rules, bills, "
+               "dues — works the same. This replaces all current data.")
+    types = list(core.BUSINESS_TEMPLATES)
+    cur = core.get_setting(conn, "business_type", core.DEFAULT_TEMPLATE)
+    t = st.selectbox("Business type", types, index=types.index(cur) if cur in types else 0)
+    new_name = st.text_input("Shop name", core.BUSINESS_TEMPLATES[t][0], key=f"nm_{t}")
+    ok = st.checkbox("I understand this wipes the current orders, customers and stock")
+    if st.button("Set up shop", disabled=not ok):
         get_conn.clear()
-        core.init_db(reset=True)
+        core.init_db(reset=True, template=t, business_name=new_name.strip() or None)
         for k in ("plan", "last_result", "parse_error"):
             ss[k] = None
         st.rerun()
