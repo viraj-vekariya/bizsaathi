@@ -1,0 +1,4 @@
+streamlit>=1.40
+sarvamai>=0.1.36
+python-dotenv
+pandas
