@@ -399,7 +399,8 @@ def test_edit_quantity_in_grid(db):
     rid = preview_rid(at)
     edit_grid(at, f"ed_{rid}", {"edited_rows": {"0": {"Qty": 2}}})
     assert not at.button(key=f"ok_{rid}").disabled
-    assert at.session_state["plan"]["subtotal"] == 900
+    price = core.connect().execute("SELECT price FROM products WHERE name='Basmati Rice 5kg'").fetchone()[0]
+    assert at.session_state["plan"]["subtotal"] == 2 * price
 
 
 # ================================================================= other pages
@@ -546,6 +547,7 @@ def test_live_understand_and_listen(db, monkeypatch):
     monkeypatch.undo()  # real parse / speak / translate
     monkeypatch.setattr(core, "DB_PATH", path)
     st.cache_resource.clear()
+    assert core.parse_command is not fake_parse and core.speak is not fake_speak
     at = new_app()
     at.text_area(key="cmd").input("Rahul ordered 10 bottles at ₹40 each. He paid ₹200 in advance.")
     btn(at, "Understand").click()
@@ -555,3 +557,118 @@ def test_live_understand_and_listen(db, monkeypatch):
     go(at, "Follow-ups")
     [b for b in at.button if b.label == "Listen"][0].click()
     run(at)  # may fail upstream; must not crash
+
+
+# ================================================================= module combinations & edge paths
+def test_orders_off_blocks_sale(db):
+    at = new_app()
+    at.toggle(key="tog_Orders").set_value(False)
+    run(at)
+    btn(at, "Sale with advance").click()
+    run(at)
+    assert at.button(key=f"ok_{preview_rid(at)}").disabled
+    assert any("Orders module is disabled" in e.value for e in at.error)
+
+
+def test_payments_and_invoices_off(db):
+    at = new_app()
+    at.toggle(key="tog_Payments").set_value(False)
+    run(at)
+    at.toggle(key="tog_Invoices").set_value(False)
+    run(at)
+    btn(at, "Sale with advance").click()
+    run(at)
+    assert "Payment of ₹200.00 not recorded" in md_text(at) and "Invoice not generated" in md_text(at)
+    p0 = count(db, "payments")
+    at.button(key=f"ok_{preview_rid(at)}").click()
+    run(at)
+    assert count(db, "payments") == p0 and count(db, "invoices") == 3
+    assert not any(m.value.startswith("**Bill INV-") for m in at.markdown)
+    go(at, "Orders")
+    assert not at.main.selectbox  # no bill picker with Invoices off
+
+
+def test_customer_management_off_hides_form(db):
+    at = new_app()
+    at.toggle(key="tog_Customer Management").set_value(False)
+    run(at)
+    go(at, "Customers & Dues")
+    assert not [b for b in at.button if b.key == "save_cust"]
+
+
+def test_grid_delete_row_and_restock(db):
+    at = new_app()
+    btn(at, "Hindi").click()
+    run(at)
+    rid = preview_rid(at)
+    assert len(at.session_state["plan"]["lines"]) == 2
+    edit_grid(at, f"ed_{rid}", {"deleted_rows": [1]})
+    assert len(at.session_state["plan"]["lines"]) == 1
+    at.selectbox(key=f"in_{rid}").set_value("restock")
+    run(at)
+    assert "Units received" in md_text(at)
+    at.selectbox(key=f"in_{rid}").set_value("payment")
+    run(at)
+    assert "Dues before" in md_text(at)
+
+
+def test_followups_voice_failure_is_friendly(db, monkeypatch):
+    def boom(text, lang):
+        raise RuntimeError("tts down")
+    monkeypatch.setattr(core, "speak", boom)
+    at = new_app()
+    go(at, "Follow-ups")
+    [b for b in at.button if b.label == "Listen"][0].click()
+    run(at)
+    assert any("Voice is unavailable" in w.value for w in at.warning)
+
+
+def test_settings_blank_name_falls_back(db):
+    at = new_app()
+    go(at, "Settings")
+    at.text_input(key="biz_name").input("   ")
+    at.button(key="save_name").click()
+    run(at)
+    assert core.get_setting(db, "business_name") == "My Shop"
+
+
+def test_bakery_examples_and_hindi_preview(db):
+    at = new_app()
+    go(at, "Settings")
+    at.selectbox(key="setup_type").set_value("Bakery & sweets")
+    run(at)
+    at.checkbox(key="ok_setup").check()
+    run(at)
+    at.button(key="setup_btn").click()
+    run(at)
+    go(at, "Assistant")
+    labels = [b.label for b in at.button if (b.key or "").startswith("ex_")]
+    assert labels == ["Sale with advance", "Payment against dues", "Not enough stock", "Hinglish"]
+    btn(at, "Sale with advance").click()
+    run(at)
+    assert at.session_state["plan"]["lines"][0]["product"] == "Rasgulla (1 pc)"
+    at.selectbox(key="lang").set_value("hi-IN")
+    run(at)
+    run(at)
+    assert at.session_state["plan"] is not None  # preview survives a language switch
+    at.button(key=f"ok_{preview_rid(at)}").click()
+    run(at)
+    assert at.session_state["last_result"]
+
+
+def test_custom_empty_shop(db):
+    at = new_app()
+    go(at, "Settings")
+    at.selectbox(key="setup_type").set_value("Custom (start empty)")
+    run(at)
+    at.checkbox(key="ok_setup").check()
+    run(at)
+    at.button(key="setup_btn").click()
+    run(at)
+    for p in ["Assistant", "Dashboard", "Orders", "Invoices", "Customers & Dues", "Inventory", "Follow-ups",
+              "Insights"]:
+        go(at, p)
+    go(at, "Assistant")
+    assert any("catalog is empty" in i.value for i in at.info)
+    btn(at, "Manual entry").click()
+    run(at)

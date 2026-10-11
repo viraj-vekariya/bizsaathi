@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import random
 import re
 import sqlite3
 import uuid
@@ -57,62 +58,120 @@ CREATE TABLE IF NOT EXISTS processed_requests (request_id TEXT PRIMARY KEY, crea
 
 # A business type is just data: a starter catalog. The parser, rules and UI read whatever catalog is
 # in the database, so supporting a new kind of shop needs no code changes.
-# name, unit, price, stock, low-stock threshold, aliases (English / Hinglish / Hindi / Bengali)
+# name, unit, price (2026 MRP, ₹), stock, low-stock threshold, aliases
+# (English / Hinglish / Hindi / Bengali, plus Tamil / Telugu where shoppers use them)
 BUSINESS_TEMPLATES = {
     "Kirana / General store": ("Maa Durga General Store", [
-        ("Water Bottle 1L", "bottle", 40, 60, 15, "bottle,bottles,water,paani,pani,paani ki bottle,बोतल,पानी,বোতল,জল"),
-        ("Parle-G Biscuit", "pack", 10, 200, 30, "biscuit,biscuits,parle,parle g,बिस्कुट,বিস্কুট"),
-        ("Amul Milk 500ml", "packet", 33, 40, 10, "milk,doodh,dudh,amul,दूध,দুধ"),
-        ("Tata Salt 1kg", "packet", 28, 35, 10, "salt,namak,नमक,লবণ,নুন"),
-        ("Aashirvaad Atta 5kg", "bag", 285, 12, 5, "atta,aata,flour,wheat flour,आटा,আটা"),
-        ("Fortune Oil 1L", "pouch", 185, 6, 8, "oil,tel,cooking oil,तेल,তেল"),
-        ("Sugar 1kg", "packet", 48, 30, 10, "sugar,cheeni,chini,चीनी,চিনি"),
-        ("Toor Dal 1kg", "packet", 160, 18, 6, "dal,daal,toor,arhar,दाल,ডাল"),
-        ("Basmati Rice 5kg", "bag", 450, 4, 5, "rice,chawal,basmati,चावल,চাল"),
-        ("Maggi Noodles", "pack", 14, 90, 20, "maggi,noodles,मैगी,ম্যাগি"),
-        ("Lux Soap", "bar", 38, 45, 10, "soap,sabun,lux,साबुन,সাবান"),
-        ("Colgate Toothpaste 100g", "tube", 55, 25, 8, "toothpaste,colgate,paste,टूथपेस्ट,টুথপেস্ট"),
-        ("Surf Excel 1kg", "packet", 140, 20, 6, "surf,detergent,washing powder,सर्फ,সার্ফ"),
+        ("Water Bottle 1L", "bottle", 40, 60, 15,
+         "bottle,bottles,water,water bottle,paani,pani,paani ki bottle,jol,बोतल,पानी,বোতল,জল,পানি,தண்ணீர்,నీళ్ళు"),
+        ("Parle-G Biscuit", "pack", 10, 200, 30, "biscuit,biscuits,parle,parle g,parle-g,बिस्कुट,বিস্কুট,பிஸ்கட்"),
+        ("Amul Milk 500ml", "packet", 34, 40, 10, "milk,doodh,dudh,amul,amul gold,दूध,দুধ,பால்,పాలు"),
+        ("Tata Salt 1kg", "packet", 30, 35, 10, "salt,namak,noon,tata salt,नमक,লবণ,নুন,உப்பு,ఉప్పు"),
+        ("Aashirvaad Atta 5kg", "bag", 295, 14, 5, "atta,aata,flour,wheat flour,gehu ka atta,आटा,আটা,கோதுமை மாவு"),
+        ("Fortune Oil 1L", "pouch", 165, 6, 8, "oil,tel,cooking oil,soyabean oil,refined oil,तेल,তেল,எண்ணெய்,నూనె"),
+        ("Mustard Oil 1L", "bottle", 195, 15, 5,
+         "mustard oil,sarson tel,sarson ka tel,sorsher tel,kachi ghani,सरसों तेल,সরষের তেল"),
+        ("Sugar 1kg", "packet", 48, 30, 10, "sugar,cheeni,chini,चीनी,চিনি,சர்க்கரை,చక్కెర"),
+        ("Toor Dal 1kg", "packet", 170, 18, 6, "dal,daal,toor,toor dal,arhar,arhar dal,दाल,अरहर,ডাল,துவரம் பருப்பு,కంది పప్పు"),
+        ("Basmati Rice 5kg", "bag", 499, 4, 5, "rice,chawal,basmati,basmati rice,चावल,চাল,அரிசி,బియ్యం"),
+        ("Maggi Noodles", "pack", 14, 90, 20, "maggi,noodles,maggi noodles,मैगी,ম্যাগি,மேகி"),
+        ("Lux Soap", "bar", 38, 45, 10, "soap,sabun,lux,साबुन,সাবান,சோப்பு,సబ్బు"),
+        ("Colgate Toothpaste 100g", "tube", 60, 25, 8, "toothpaste,colgate,paste,manjan,टूथपेस्ट,টুথপেস্ট"),
+        ("Surf Excel 1kg", "packet", 145, 20, 6, "surf,surf excel,detergent,washing powder,सर्फ,সার্ফ,ডিটারজেন্ট"),
+        ("Tata Tea Gold 250g", "packet", 165, 20, 6, "tea,chai,chai patti,tata tea,चाय,चायपत्ती,চা পাতা,தேயிலை,టీ పొడి"),
+        ("Eggs (1 pc)", "piece", 7, 120, 30, "egg,eggs,anda,ande,dim,अंडा,अंडे,ডিম,முட்டை,గుడ్డు"),
+        ("Britannia Bread 400g", "loaf", 50, 15, 4, "bread,pav,double roti,pauruti,ब्रेड,পাউরুটি,ரொட்டி"),
+        ("Amul Butter 100g", "pack", 62, 3, 5, "butter,makhan,amul butter,मक्खन,মাখন,வெண்ணெய்"),
     ]),
     "Bakery & sweets": ("Kolkata Sweet House", [
-        ("Rasgulla (1 pc)", "piece", 15, 200, 40, "rasgulla,rosogolla,रसगुल्ला,রসগোল্লা"),
-        ("Sandesh (1 pc)", "piece", 20, 150, 30, "sandesh,sondesh,संदेश,সন্দেশ"),
-        ("Mishti Doi 250g", "cup", 60, 40, 10, "mishti doi,doi,curd,dahi,मिष्टी दोई,মিষ্টি দই"),
-        ("Bread Loaf", "loaf", 45, 30, 8, "bread,pav,double roti,ब्रेड,পাউরুটি"),
-        ("Chocolate Cake 500g", "cake", 450, 6, 2, "cake,chocolate cake,केक,কেক"),
-        ("Cookies Box", "box", 120, 25, 6, "cookies,biscuits,कुकीज़,কুকিজ"),
-        ("Samosa", "piece", 12, 80, 20, "samosa,singara,समोसा,শিঙাড়া"),
+        ("Rasgulla (1 pc)", "piece", 20, 200, 40, "rasgulla,rosogolla,roshogolla,रसगुल्ला,রসগোল্লা"),
+        ("Sandesh (1 pc)", "piece", 25, 150, 30, "sandesh,sondesh,संदेश,সন্দেশ"),
+        ("Langcha (1 pc)", "piece", 25, 100, 25, "langcha,lyangcha,लांचा,ল্যাংচা"),
+        ("Gulab Jamun (1 pc)", "piece", 20, 120, 25, "gulab jamun,jamun,pantua,गुलाब जामुन,পান্তুয়া"),
+        ("Mishti Doi 250g", "cup", 70, 40, 10, "mishti doi,doi,sweet curd,dahi,मिष्टी दोई,মিষ্টি দই"),
+        ("Kaju Barfi 250g", "box", 300, 4, 5, "kaju barfi,kaju katli,barfi,काजू बर्फी,কাজু বরফি"),
+        ("Jalebi 250g", "box", 80, 20, 5, "jalebi,jilipi,जलेबी,জিলিপি"),
+        ("Samosa", "piece", 15, 80, 20, "samosa,singara,shingara,समोसा,শিঙাড়া"),
+        ("Kachori", "piece", 20, 60, 15, "kachori,kochuri,कचौरी,কচুরি"),
+        ("Veg Puff", "piece", 25, 40, 10, "puff,veg puff,patties,पफ,প্যাটিস"),
+        ("Cream Roll", "piece", 20, 50, 10, "cream roll,roll,क्रीम रोल,ক্রিম রোল"),
+        ("Bread Loaf", "loaf", 50, 30, 8, "bread,pav,double roti,pauruti,ब्रेड,পাউরুটি"),
+        ("Fruit Cake 250g", "cake", 120, 25, 6, "fruit cake,plum cake,फ्रूट केक,ফ্রুট কেক"),
+        ("Chocolate Cake 500g", "cake", 550, 2, 2, "cake,chocolate cake,birthday cake,केक,কেক"),
+        ("Cookies Box", "box", 150, 25, 6, "cookies,biscuits,cookie box,कुकीज़,কুকিজ"),
     ]),
     "Medical store": ("Sanjeevani Medicos", [
-        ("Paracetamol 500mg (strip)", "strip", 30, 120, 25, "paracetamol,crocin,dolo,fever tablet,पेरासिटामोल"),
-        ("Cetirizine 10mg (strip)", "strip", 25, 80, 20, "cetirizine,allergy tablet,cetzine"),
-        ("ORS Sachet", "sachet", 22, 100, 25, "ors,electral,glucose,ओआरएस"),
-        ("Cough Syrup 100ml", "bottle", 110, 30, 8, "cough syrup,syrup,khansi,खांसी की दवा"),
-        ("Bandage Roll", "roll", 40, 50, 10, "bandage,patti,पट्टी"),
-        ("Hand Sanitizer 200ml", "bottle", 95, 35, 8, "sanitizer,सैनिटाइज़र"),
-        ("Digital Thermometer", "piece", 250, 8, 3, "thermometer,थर्मामीटर"),
+        ("Paracetamol 500mg (strip)", "strip", 25, 120, 25, "paracetamol,crocin,calpol,fever tablet,bukhar ki dawai,पेरासिटामोल,প্যারাসিটামল"),
+        ("Dolo 650 (strip)", "strip", 34, 100, 25, "dolo,dolo 650,डोलो,ডোলো"),
+        ("Cetirizine 10mg (strip)", "strip", 20, 80, 20, "cetirizine,allergy tablet,cetzine,okacet,सेट्रिज़िन"),
+        ("Pantoprazole 40mg (strip)", "strip", 110, 50, 12, "pantoprazole,pan 40,pantop,gas tablet,acidity tablet,गैस की दवा"),
+        ("Azithromycin 500mg (strip)", "strip", 120, 6, 8, "azithromycin,azithral,azee,एज़िथ्रोमाइसिन"),
+        ("Metformin 500mg (strip)", "strip", 35, 60, 15, "metformin,sugar tablet,diabetes tablet,glycomet,शुगर की दवा"),
+        ("ORS Sachet", "sachet", 22, 100, 25, "ors,electral,glucose,ओआरएस,ও আর এস"),
+        ("Cough Syrup 100ml", "bottle", 120, 30, 8, "cough syrup,syrup,khansi,benadryl,खांसी की दवा,কাশির সিরাপ"),
+        ("Vicks VapoRub 50ml", "bottle", 155, 25, 6, "vicks,vaporub,balm,विक्स,ভিক্স"),
+        ("Volini Gel 30g", "tube", 125, 4, 5, "volini,pain gel,moov,dard ki dawa,वोलिनी"),
+        ("Dettol Antiseptic 250ml", "bottle", 140, 20, 5, "dettol,antiseptic,डेटॉल,ডেটল"),
+        ("Bandage Roll", "roll", 45, 50, 10, "bandage,patti,crepe bandage,पट्टी,ব্যান্ডেজ"),
+        ("Band-Aid (10 pcs)", "pack", 30, 40, 10, "band aid,bandaid,plaster,बैंड एड"),
+        ("Hand Sanitizer 200ml", "bottle", 100, 35, 8, "sanitizer,hand sanitizer,सैनिटाइज़र,স্যানিটাইজার"),
+        ("Face Mask (pack of 5)", "pack", 50, 60, 15, "mask,face mask,मास्क,মাস্ক"),
+        ("Digital Thermometer", "piece", 250, 3, 3, "thermometer,थर्मामीटर,থার্মোমিটার"),
     ]),
     "Hardware & paint": ("Vishwakarma Hardware", [
-        ("Wall Putty 20kg", "bag", 850, 15, 4, "putty,wall putty,पुट्टी"),
-        ("Emulsion Paint 4L", "can", 1450, 10, 3, "paint,emulsion,पेंट,রং"),
-        ("Paint Brush 4in", "piece", 120, 30, 8, "brush,paint brush,ब्रश"),
-        ("Screws (box of 100)", "box", 90, 40, 10, "screw,screws,पेंच"),
-        ("PVC Pipe 1in (10ft)", "length", 210, 25, 6, "pipe,pvc pipe,पाइप"),
-        ("LED Bulb 9W", "piece", 99, 60, 15, "bulb,led,बल्ब,বাল্ব"),
-        ("Electrical Tape", "roll", 25, 70, 15, "tape,insulation tape,टेप"),
+        ("Cement 50kg", "bag", 420, 9, 10, "cement,ultratech,acc,सीमेंट,সিমেন্ট"),
+        ("Wall Putty 20kg", "bag", 900, 15, 4, "putty,wall putty,birla putty,पुट्टी,পুটি"),
+        ("Emulsion Paint 4L", "can", 1450, 10, 3, "paint,emulsion,asian paints,पेंट,পেইন্ট"),
+        ("Primer 4L", "can", 850, 8, 3, "primer,प्राइमर,প্রাইমার"),
+        ("Paint Brush 4in", "piece", 120, 30, 8, "brush,paint brush,ब्रश,ব্রাশ"),
+        ("Sandpaper Sheet", "sheet", 15, 100, 20, "sandpaper,regmal,रेगमाल,শিরিষ কাগজ"),
+        ("Screws (box of 100)", "box", 90, 40, 10, "screw,screws,pench,पेंच,স্ক্রু"),
+        ("Wire Nails 1kg", "packet", 110, 25, 6, "nails,keel,kil,कील,পেরেক"),
+        ("PVC Pipe 1in (10ft)", "length", 210, 25, 6, "pipe,pvc pipe,पाइप,পাইপ"),
+        ("Fevicol SH 1kg", "tin", 340, 12, 4, "fevicol,glue,gond,फेविकोल,ফেভিকল"),
+        ("LED Bulb 9W", "piece", 99, 60, 15, "bulb,led,led bulb,बल्ब,বাল্ব"),
+        ("Switch 6A", "piece", 35, 80, 20, "switch,light switch,स्विच,সুইচ"),
+        ("Copper Wire 1.5mm (90m)", "coil", 1650, 2, 3, "wire,copper wire,taar,तार,তার"),
+        ("Extension Board 4-socket", "piece", 350, 3, 4, "extension,extension board,spike guard,एक्सटेंशन"),
+        ("Electrical Tape", "roll", 25, 70, 15, "tape,insulation tape,टेप,টেপ"),
+        ("Padlock 50mm", "piece", 220, 18, 5, "lock,padlock,tala,ताला,তালা"),
     ]),
     "Stationery": ("Vidya Stationers", [
-        ("Notebook 200 pages", "piece", 60, 120, 25, "notebook,copy,कॉपी,খাতা"),
-        ("Ball Pen (blue)", "piece", 10, 300, 50, "pen,ball pen,पेन,কলম"),
-        ("Pencil", "piece", 5, 250, 50, "pencil,पेंसिल,পেন্সিল"),
-        ("Geometry Box", "box", 150, 20, 5, "geometry box,compass box,ज्योमेट्री बॉक्स"),
-        ("A4 Paper Ream", "ream", 320, 15, 4, "a4,paper,rim,कागज़"),
-        ("Glue Stick", "piece", 25, 60, 15, "glue,fevistick,गोंद"),
+        ("Notebook 200 pages", "piece", 70, 120, 25, "notebook,copy,classmate,कॉपी,খাতা"),
+        ("Long Register 300 pages", "piece", 130, 40, 10, "register,long register,रजिस्टर,রেজিস্টার"),
+        ("Ball Pen (blue)", "piece", 10, 300, 50, "pen,ball pen,blue pen,पेन,কলম"),
+        ("Gel Pen (black)", "piece", 20, 150, 30, "gel pen,black pen,जेल पेन"),
+        ("Pencil", "piece", 5, 250, 50, "pencil,apsara,पेंसिल,পেন্সিল"),
+        ("Eraser", "piece", 5, 200, 40, "eraser,rubber,रबर,ইরেজার,রাবার"),
+        ("Sharpener", "piece", 5, 150, 30, "sharpener,cutter,शार्पनर,কাটার"),
+        ("Scale 30cm", "piece", 15, 80, 20, "scale,ruler,स्केल,স্কেল"),
+        ("Highlighter", "piece", 30, 60, 15, "highlighter,marker,हाइलाइटर"),
+        ("Geometry Box", "box", 150, 4, 5, "geometry box,compass box,ज्योमेट्री बॉक्स,জ্যামিতি বাক্স"),
+        ("A4 Paper Ream", "ream", 350, 3, 4, "a4,paper,rim,ream,कागज़,কাগজ"),
+        ("Glue Stick", "piece", 25, 60, 15, "glue,fevistick,glue stick,गोंद,আঠা"),
+        ("Stapler", "piece", 120, 15, 4, "stapler,स्टेपलर,স্ট্যাপলার"),
+        ("Colour Pencils (12)", "box", 90, 30, 8, "colour pencil,color pencils,crayons,रंगीन पेंसिल,রং পেন্সিল"),
+        ("Sticky Notes", "pad", 60, 40, 10, "sticky notes,post it,स्टिकी नोट्स"),
+        ("Scientific Calculator", "piece", 650, 2, 3, "calculator,casio,fx-82,कैलकुलेटर,ক্যালকুলেটর"),
     ]),
     "Custom (start empty)": ("My Shop", []),
 }
 DEFAULT_TEMPLATE = "Kirana / General store"
-SEED_CUSTOMERS = [("Priya Sharma", "98300 11223"), ("Amit Das", "98310 44556"), ("Sunita Devi", "97480 77889")]
+# Obviously fictional numbers. First names stay unique so "Amit" / "Priya" / "Sunita" resolve to one person.
+# No "Rahul" on purpose: the live demo creates him as a new customer.
+SEED_CUSTOMERS = [
+    ("Priya Sharma", "98300 11223"), ("Amit Das", "98310 44556"), ("Sunita Devi", "97480 77889"),
+    ("Subhajit Mondal", "90510 22334"), ("Rina Ghosh", "83480 55667"), ("Mohammed Irfan", "70010 88990"),
+    ("Tanmay Mahato", "62970 12121"), ("Ankit Agarwal", "99030 34343"), ("Lakshmi Narayanan", "94440 56565"),
+    ("Venkatesh Reddy", "91000 78787"),
+]
+# How each regular settles up: "full" pays at the counter, "khata" runs a tab and pays some of it later,
+# "clears" pays part at the counter and later clears the whole tab.
+_PAY_STYLE = {"Priya Sharma": "full", "Ankit Agarwal": "full", "Lakshmi Narayanan": "full", "Venkatesh Reddy": "full",
+              "Amit Das": "khata", "Sunita Devi": "khata", "Subhajit Mondal": "khata", "Tanmay Mahato": "khata",
+              "Rina Ghosh": "clears", "Mohammed Irfan": "clears", "Walk-in Customer": "full"}
+# Kept out of the seeded history so the scripted live demo starts from known numbers.
+_DEMO_PROTECTED = {"Water Bottle 1L"}
 
 
 def now() -> str:
@@ -150,32 +209,128 @@ def init_db(reset: bool = False, template: str | None = None, business_name: str
 
 def _seed(conn: sqlite3.Connection, template: str, business_name: str | None) -> None:
     default_name, products = BUSINESS_TEMPLATES[template]
+    rng = random.Random(42)  # deterministic: every fresh shop of a type looks the same
+    start = datetime.now()
     with transaction(conn):
         for name, unit, price, stock, low, aliases in products:
             conn.execute(
                 "INSERT INTO products(name, unit, price, stock, low_stock_at, aliases) VALUES (?,?,?,?,?,?)",
                 (name, unit, price, stock, low, aliases))
         for name, phone in SEED_CUSTOMERS:
-            conn.execute("INSERT INTO customers(name, phone, created_at) VALUES (?,?,?)", (name, phone, now()))
+            joined = (start - timedelta(days=rng.randint(30, 240), hours=rng.randint(0, 10))).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute("INSERT INTO customers(name, phone, created_at) VALUES (?,?,?)", (name, phone, joined))
         for m in MODULES:
             conn.execute("INSERT INTO settings(key, value) VALUES (?, '1')", (f"module:{m}",))
         conn.execute("INSERT INTO settings(key, value) VALUES ('business_name', ?)", (business_name or default_name,))
         conn.execute("INSERT INTO settings(key, value) VALUES ('business_type', ?)", (template,))
     if len(products) < 3:
         return
-    # A little real history for the dashboard, written through the same code path the app uses.
-    names = [p[0] for p in products]
-    history = [(2, "Priya Sharma", [(names[0], 2), (names[1], 1)], 1.0, "upi"),
-               (1, "Amit Das", [(names[2], 1), (names[1], 2)], 0.5, "cash"),
-               (0, "Sunita Devi", [(names[-1], 2), (names[0], 1)], 0.0, "cash")]
+    _seed_history(conn, products, rng, start)
+
+
+def _seed_history(conn, products, rng, start: datetime) -> None:
+    """Two weeks of believable trade, written through the same build_plan -> commit_plan path the app uses.
+    Items that start below their reorder level, and demo-protected items, are never sold, and no sale takes
+    any other item down to its reorder level, so the low-stock list is exactly what the catalog declares."""
     mods = {m: True for m in MODULES}
-    for days_ago, cust, items, paid_share, method in history:
-        plan = build_plan({"intent": "sale", "customer_name": cust,
-                           "items": [{"product": p, "quantity": q, "stated_unit_price": None} for p, q in items],
-                           "payment_amount": None, "payment_method": method}, mods, conn)
-        plan["payment_amount"] = round(plan["subtotal"] * paid_share)
-        recompute(plan, mods, conn)
-        commit_plan(plan, mods, conn, when=(datetime.now() - timedelta(days=days_ago, hours=3)).strftime("%Y-%m-%d %H:%M:%S"))
+    initial = {p[0]: (p[2], p[3], p[4]) for p in products}  # name -> (price, stock, low)
+    sellable = [n for n, (_, s, low) in initial.items() if s > low and n not in _DEMO_PROTECTED]
+    if not sellable:
+        return
+    regulars = [c for c, _ in SEED_CUSTOMERS]
+    weights = [9 if c in ("Amit Das", "Sunita Devi", "Priya Sharma") else 5 for c in regulars] + [8]
+    buyers = regulars + ["Walk-in Customer"]
+    today0 = start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def at(days_ago: int, hour: float) -> datetime:
+        if days_ago == 0:  # today: spread across the part of the day that has already happened
+            span = (start - today0).total_seconds()
+            return today0 + timedelta(seconds=span * min(hour, 21) / 22)
+        return today0 - timedelta(days=days_ago) + timedelta(hours=hour)
+
+    events = []  # (when, kind, data)
+    for d in range(13, -1, -1):
+        n = 3 if d == 0 else rng.choice([1, 2, 2, 2, 3])
+        for h in sorted(rng.uniform(8, 21) for _ in range(n)):
+            cust = rng.choices(buyers, weights)[0]
+            picks = rng.sample(sellable, min(len(sellable), rng.choice([1, 2, 2, 3, 3, 4])))
+            events.append((at(d, h), "sale", cust, picks))
+    # Settling up against the tab, and two supplier deliveries.
+    for d, cust in [(9, "Rina Ghosh"), (6, "Amit Das"), (4, "Mohammed Irfan"), (3, "Subhajit Mondal"),
+                    (1, "Sunita Devi"), (1, "Tanmay Mahato")]:
+        events.append((at(d, rng.uniform(17, 20.5)), "payment", cust, None))
+    events.append((at(8, 7.5), "restock", None, None))
+    events.append((at(3, 7.5), "restock", None, None))
+    events.sort(key=lambda e: e[0])
+    # Every regular shows up at least once: the first sales of the fortnight go round the customer book.
+    sale_idx = [i for i, e in enumerate(events) if e[1] == "sale"]
+    first = regulars[:]
+    rng.shuffle(first)
+    for i, cust in zip(sale_idx, first):
+        events[i] = (events[i][0], "sale", cust, events[i][3])
+
+    def stock_of(name):
+        return conn.execute("SELECT stock FROM products WHERE name=?", (name,)).fetchone()[0]
+
+    def qty_for(price):
+        if price <= 12:
+            return rng.randint(3, 12)
+        if price <= 30:
+            return rng.randint(2, 6)
+        if price <= 80:
+            return rng.randint(1, 4)
+        if price <= 200:
+            return rng.randint(1, 2)
+        return 1
+
+    restocked = 0
+    for when, kind, cust, picks in events:
+        ts = when.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            if kind == "sale":
+                items = []
+                for name in picks:
+                    price, _, low = initial[name]
+                    q = min(qty_for(price), stock_of(name) - low - 1)
+                    if q > 0:
+                        items.append({"product": name, "quantity": q, "stated_unit_price": None})
+                if not items:
+                    continue
+                style = _PAY_STYLE.get(cust, "full")
+                plan = build_plan({"intent": "sale", "customer_name": cust, "items": items, "payment_amount": None,
+                                   "payment_method": rng.choices(["cash", "upi", "card"], [5, 4, 1])[0]}, mods, conn)
+                sub = plan["subtotal"]
+                share = 1.0 if style == "full" else rng.choice([0.0, 0.0, 0.5] if style == "khata" else [1.0, 0.5, 0.0])
+                plan["payment_amount"] = sub if share == 1.0 else float(min(sub, round(sub * share / 10) * 10))
+                if plan["payment_amount"] == 0 and plan["payment_method"] == "card":
+                    plan["payment_method"] = "cash"
+                recompute(plan, mods, conn)
+            elif kind == "payment":
+                c = find_customer(cust, conn)
+                due = customer_dues(conn, c["id"]) if c else 0
+                if _PAY_STYLE.get(cust) == "clears":
+                    amount = due
+                else:  # pays a round part of the tab and keeps the rest running
+                    amount = float(int(due * rng.uniform(0.35, 0.6) / 50) * 50)
+                if amount <= 0:
+                    continue
+                plan = build_plan({"intent": "payment", "customer_name": cust, "items": [], "payment_amount": amount,
+                                   "payment_method": rng.choice(["cash", "upi"])}, mods, conn)
+            else:  # restock the two most-sold items back up toward their opening level
+                rows = conn.execute("""SELECT p.name, p.stock FROM products p JOIN order_items oi ON oi.product_id = p.id
+                                       GROUP BY p.id ORDER BY SUM(oi.quantity) DESC""").fetchall()
+                rows = [r for r in rows if r["name"] in sellable][restocked * 2: restocked * 2 + 2]
+                restocked += 1
+                items = [{"product": r["name"], "quantity": max(initial[r["name"]][1] - r["stock"], 1),
+                          "stated_unit_price": None} for r in rows]
+                if not items:
+                    continue
+                plan = build_plan({"intent": "restock", "customer_name": None, "items": items, "payment_amount": None,
+                                   "payment_method": None}, mods, conn)
+            plan["source_text"] = None
+            commit_plan(plan, mods, conn, when=ts)
+        except ValueError:  # e.g. would break a stock or money rule: skip, history is decoration
+            continue
 
 
 def save_catalog(conn, rows: list[dict]) -> int:

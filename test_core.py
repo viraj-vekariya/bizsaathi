@@ -59,7 +59,7 @@ print("5 validation OK")
 mods = dict(ALL, Inventory=False, Payments=False, Invoices=False)
 sm = stock("Maggi Noodles")
 p = sale("Priya", [("maggi", 5)], 70, mods)
-assert not p["errors"] and p["skipped"] and p["balance"] == 70
+assert not p["errors"] and p["skipped"] and p["balance"] == p["subtotal"]
 r = core.commit_plan(p, mods, conn)
 assert stock("Maggi Noodles") == sm and not r["payment_ids"] and not r["invoice_no"]
 print("6 module toggles respected OK")

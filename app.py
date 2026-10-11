@@ -771,9 +771,11 @@ def page_settings():
  "Insights": page_insights, "Settings": page_settings}[ss.page]()
 
 # Any UI string not yet translated for this language: translate them all in ONE Sarvam call, then redraw once.
-if _missing and not ss.get("_i18n_retry"):
+# Each string is tried once per session, so an API outage can't add a slow call + redraw to every click.
+_tried = ss.setdefault("_i18n_tried", set())
+_todo = [s for s in dict.fromkeys(_missing) if (LANG, s) not in _tried]
+if _todo:
+    _tried.update((LANG, s) for s in _todo)
     with st.spinner(f"{core.LANGUAGES[LANG]} …"):
-        core.translate_many(list(dict.fromkeys(_missing)), LANG, conn)
-    ss._i18n_retry = True
+        core.translate_many(_todo, LANG, conn)
     st.rerun()
-ss._i18n_retry = False
