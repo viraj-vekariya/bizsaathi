@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1f6f4a"/>
+  <path d="M16 18h32a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4H30l-9 7v-7h-5a4 4 0 0 1-4-4V22a4 4 0 0 1 4-4z" fill="#ffffff"/>
+  <path d="M24 25h16M24 30h16M30 25c5 0 5 10 0 10h-5l11 9" fill="none" stroke="#1f6f4a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="76" y="41" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="27" font-weight="700" fill="#17201b">Biz<tspan fill="#1f6f4a">Saathi</tspan></text>
+  <text x="77" y="57" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" font-weight="500" fill="#5d6a63" letter-spacing="0.6">YOUR SHOP'S AI SAATHI</text>
+</svg>

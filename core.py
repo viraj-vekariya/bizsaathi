@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE TABLE IF NOT EXISTS stock_moves (
     id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id),
     change INTEGER NOT NULL, reason TEXT NOT NULL, ref TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS translations (lang TEXT NOT NULL, src TEXT NOT NULL, dst TEXT NOT NULL, PRIMARY KEY (lang, src));
 CREATE TABLE IF NOT EXISTS processed_requests (request_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 """
 
@@ -184,8 +185,11 @@ def save_catalog(conn, rows: list[dict]) -> int:
         name = str(r.get("name") or "").strip()
         if not name:
             continue
+        low = r.get("low_stock_at")
         try:
-            price, stock, low = float(r["price"]), int(r["stock"]), int(r.get("low_stock_at") or 0)
+            price, stock, low = float(r["price"]), int(r["stock"]), int(0 if low is None or low != low else low)
+            if price != price:  # a cleared cell arrives as NaN, which SQLite would store as NULL
+                raise ValueError
         except (TypeError, ValueError, KeyError):
             raise ValueError(f"'{name}': price, stock and reorder level must be numbers.")
         if price < 0 or stock < 0 or low < 0:
@@ -285,16 +289,42 @@ def ai_available() -> bool:
     return bool(os.getenv("SARVAM_API_KEY"))
 
 
+_API_DOWN_UNTIL = 0.0  # circuit breaker: after a failure, skip Sarvam briefly instead of waiting on every click
+
+
+def api_failed() -> None:
+    global _API_DOWN_UNTIL
+    import time
+    _API_DOWN_UNTIL = time.time() + 120
+
+
 def _client():
+    import time
     from sarvamai import SarvamAI
     key = os.getenv("SARVAM_API_KEY")
     if not key:
         raise RuntimeError("SARVAM_API_KEY is missing from .env")
-    return SarvamAI(api_subscription_key=key)
+    if time.time() < _API_DOWN_UNTIL:
+        raise RuntimeError("Sarvam API recently failed; using offline mode for a moment")
+    return SarvamAI(api_subscription_key=key, timeout=20)
 
 
 def parse_command(text: str, conn) -> dict:
-    """Ask Sarvam-105B to turn an instruction into a structured transaction. Raises on API failure."""
+    """Sarvam-105B first; if the API is unreachable or out of credits, fall back to offline rules so the
+    demo flow never dead-ends (the owner still reviews the preview before anything is saved)."""
+    try:
+        return _parse_with_ai(text, conn)
+    except Exception:
+        api_failed()
+        from offline_parser import parse_offline
+        parsed = normalise_parsed(parse_offline(text, conn, match_product, find_customer))
+        parsed["language"] = "offline rules (AI unavailable)"
+        if parsed["intent"] == "unknown":
+            raise
+        return parsed
+
+
+def _parse_with_ai(text: str, conn) -> dict:
     client = _client()
     messages = [{"role": "system", "content": _system_prompt(conn)}, {"role": "user", "content": text}]
     try:
@@ -333,13 +363,14 @@ def normalise_parsed(d: dict) -> dict:
     return out
 
 
-def transcribe(audio_bytes: bytes, filename: str = "command.wav", keyterms: list[str] | None = None) -> str:
+def transcribe(audio_bytes: bytes, filename: str = "command.wav", keyterms: list[str] | None = None,
+               language_code: str = "unknown") -> str:
     """Sarvam speech-to-text (Saaras). Product/customer names are passed as keyterms. Raises on failure."""
     client = _client()
     last_err = None
     for model in ("saaras:v4", "saaras:v3"):
         try:
-            kwargs = {"file": (filename, audio_bytes), "model": model, "mode": "transcribe", "language_code": "unknown"}
+            kwargs = {"file": (filename, audio_bytes), "model": model, "mode": "transcribe", "language_code": language_code}
             if keyterms:
                 kwargs["keyterms"] = keyterms[:50]
             resp = client.speech_to_text.transcribe(**kwargs)
@@ -717,3 +748,69 @@ def invoice_data(conn, order_id: int):
     pays = conn.execute("SELECT amount, method, created_at FROM payments WHERE order_id=? ORDER BY id",
                         (order_id,)).fetchall()
     return {"order": o, "items": items, "payments": pays}
+
+
+# ---------------------------------------------------------------- languages (Sarvam Translate + Bulbul)
+
+LANGUAGES = {"en-IN": "English", "hi-IN": "हिन्दी (Hindi)", "bn-IN": "বাংলা (Bengali)", "ta-IN": "தமிழ் (Tamil)",
+             "te-IN": "తెలుగు (Telugu)", "mr-IN": "मराठी (Marathi)", "gu-IN": "ગુજરાતી (Gujarati)",
+             "kn-IN": "ಕನ್ನಡ (Kannada)", "ml-IN": "മലയാളം (Malayalam)", "pa-IN": "ਪੰਜਾਬੀ (Punjabi)",
+             "od-IN": "ଓଡ଼ିଆ (Odia)"}
+_SEP = "\n---\n"
+
+
+def translate_many(texts: list[str], lang: str, conn) -> list[str]:
+    """Translate UI/dynamic strings with Sarvam Translate, batching with a separator and caching in SQLite.
+    Never raises: on any failure the English text is returned so the app keeps working."""
+    if lang == "en-IN" or not texts:
+        return list(texts)
+    out, missing = {}, []
+    for t in dict.fromkeys(texts):
+        row = conn.execute("SELECT dst FROM translations WHERE lang=? AND src=?", (lang, t)).fetchone()
+        if row:
+            out[t] = row[0]
+        elif t.strip():
+            missing.append(t)
+        else:
+            out[t] = t
+    if missing:
+        try:
+            client = _client()
+        except Exception:
+            client = None
+        chunks, cur = [], []
+        for t in missing:
+            if cur and len(_SEP.join(cur + [t])) > 1500:
+                chunks.append(cur)
+                cur = []
+            cur.append(t)
+        if cur:
+            chunks.append(cur)
+        for chunk in chunks:
+            got = None
+            if client:
+                try:
+                    r = client.text.translate(input=_SEP.join(chunk), source_language_code="en-IN",
+                                              target_language_code=lang, model="sarvam-translate:v1")
+                    parts = [p.strip() for p in re.split(r"\n?\s*-{3,}\s*\n?", r.translated_text or "")]
+                    parts = [p for p in parts if p != ""]
+                    if len(parts) == len(chunk):
+                        got = parts
+                    else:  # separator got mangled: translate one by one
+                        got = [client.text.translate(input=t, source_language_code="en-IN", target_language_code=lang,
+                                                     model="sarvam-translate:v1").translated_text.strip() for t in chunk]
+                except Exception:
+                    api_failed()
+                    got = None
+            for src, dst in zip(chunk, got or chunk):
+                out[src] = dst
+                if got:
+                    conn.execute("INSERT OR REPLACE INTO translations(lang, src, dst) VALUES (?,?,?)", (lang, src, dst))
+    return [out.get(t, t) for t in texts]
+
+
+def speak(text: str, lang: str) -> bytes:
+    """Bulbul text-to-speech; returns WAV bytes. Raises on failure."""
+    import base64
+    r = _client().text_to_speech.convert(text=text[:1400], language_code=lang, model="bulbul:v3")
+    return base64.b64decode(r.audios[0])
